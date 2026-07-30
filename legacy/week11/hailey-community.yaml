@@ -1,0 +1,431 @@
+---
+# 01-namespace.yaml
+apiVersion: v1           # Kubernetes core API 그룹의 버전
+kind: Namespace          # 생성할 리소스 종류는 Namespace
+metadata:
+  name: hailey-community-dev              # 생성할 Namespace의 이름
+
+
+---
+# 02-resource-quota.yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: hailey-community-quota
+  namespace: hailey-community-dev
+spec:
+  hard:
+    requests.cpu: "2"       # 선언된 CPU requests 합계 제한
+    requests.memory: "4Gi"  # 선언된 memory requests 합계 제한
+    limits.cpu: "4"         # 선언된 CPU limits 합계 제한
+    limits.memory: "8Gi"    # 선언된 memory limits 합계 제한
+    pods: "10"              # 동시에 생성할 수 있는 Pod 최대 10개
+
+
+
+---
+# 03-limitrange.yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: hailey-community-range
+  namespace: hailey-community-dev
+spec:
+  limits:
+    - type: Container
+      min:
+        cpu: "50m"
+        memory: "64Mi"
+      max:
+        cpu: "2"
+        memory: "2Gi"
+      defaultRequest:     # request이 없을 경우 자동 적용될 기본 요청값
+        cpu: "100m"
+        memory: "128Mi"
+      default:            # limits를 생략했을 때 적용
+        cpu: "500m"
+        memory: "512Mi"
+
+---
+# 04-configmap-frontend.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hailey-community-config-frontend
+  namespace: hailey-community-dev
+  labels:
+    app: hailey-community
+    tier: frontend
+data:
+  # Frontend 컨테이너 실행 포트
+  PORT: "8080"
+  # Frontend 서버가 Kubernetes 내부에서 Backend Service를 호출할 때 사용
+  API_BASE_URL: "http://backend-service:8090"
+
+
+---
+# 05-configmap-backend.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hailey-community-config-backend
+  namespace: hailey-community-dev
+  labels:
+    app: hailey-community
+    tier: backend
+data:
+  # Spring Boot 실행 환경
+  SPRING_PROFILES_ACTIVE: "prod"
+  # Backend 컨테이너 실행 포트
+  SERVER_PORT: "8090"
+  # 실제 Frontend 출처에 맞춰 변경
+  CORS_ALLOWED_ORIGINS: "http://localhost:8080"
+  # RDS
+  SPRING_DATASOURCE_URL: "jdbc:mysql://<RDS_ENDPOINT>:3306/hailey_project"
+  SPRING_DATASOURCE_USERNAME: "hailey_user"
+
+---
+# 06-secret-backend.yaml
+apiVersion: v1 # core API 그룹의 v1 버전 사용
+kind: Secret   # 생성할 리소스종류는 Secret
+metadata:
+  name: hailey-community-secret-backend #secret 객체의 이름(Pod에서 참조할 때 사용됨)
+  namespace: hailey-community-dev
+  labels:
+    app: hailey-community
+    tier: backend
+type: Opaque # 일반 문자열 데이터를 저장하는 기본 타입(기타 TLS, docker등도 있다)
+stringData:
+  SPRING_DATASOURCE_PASSWORD: "<DB_PASSWORD>" # data 사용하면 사용자가 직접 base64로 인코딩해야 하지만 stringData는 자동으로 base64로 인코딩해준다.
+---
+# 07-deployment-frontend.yaml
+apiVersion: apps/v1                    # Deployment가 속한 apps API 그룹의 v1 버전
+kind: Deployment                       # 생성할 리소스 종류는 Deployment
+metadata:
+  name: frontend-deployment            # Frontend Deployment 이름
+  namespace: hailey-community-dev      # 리소스가 생성될 Namespace
+  labels:
+    app: hailey-community              # 프로젝트를 구분하는 label
+    tier: frontend                     # Frontend 계층을 구분하는 label
+
+spec:
+  # Deployment가 유지해야 하는 Frontend Pod 수
+  replicas: 2
+
+  # 기존 Pod를 한 번에 삭제하지 않고 신규 Pod로 순차 교체한다.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # 업데이트 중 사용할 수 없는 Pod를 허용하지 않는다.
+      maxUnavailable: 0
+
+      # 업데이트 중 기존 Pod 수보다 최대 1개를 추가 생성한다.
+      maxSurge: 1
+
+  # 신규 Pod가 Ready 상태를 10초 동안 유지해야 사용 가능하다고 판단한다.
+  minReadySeconds: 10
+
+  # 300초 동안 배포가 진행되지 않으면 실패 상태로 처리한다.
+  progressDeadlineSeconds: 300
+
+  # Deployment가 관리할 Pod의 label 조건
+  selector:
+    matchLabels:
+      app: hailey-community
+      tier: frontend
+
+  # Deployment가 생성할 Pod의 설계도
+  template:
+    metadata:
+      labels:
+        # Deployment와 Service의 selector가 이 label을 사용한다.
+        app: hailey-community
+        tier: frontend
+
+    spec:
+      # Pod 종료 요청 후 정상적으로 종료할 수 있도록 최대 30초를 기다린다.
+      terminationGracePeriodSeconds: 30
+
+      # Private Docker Hub 이미지를 내려받기 위한 Secret
+      # 이미지가 Public이면 이 부분은 제거할 수 있다.
+      imagePullSecrets:
+        - name: dockerhub-secret
+
+      containers:
+        - name: frontend
+
+          # 최초 배포에 사용할 Frontend 컨테이너 이미지
+          image: khm8992/hailey-community:frontend-a1065c270292b98190aa10f91296cc13f868399f
+
+          # 이미지가 Worker Node에 없을 때 Docker Hub에서 내려받는다.
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http                 # Probe와 Service가 참조할 포트 이름
+              containerPort: 8080        # Frontend 컨테이너가 사용하는 포트
+
+          # Frontend ConfigMap 값을 환경변수로 주입한다.
+          env:
+            # Frontend 서버 실행 포트
+            - name: PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-frontend
+                  key: PORT
+
+            # Kubernetes 내부 Backend Service 주소
+            - name: API_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-frontend
+                  key: API_BASE_URL
+
+          # Scheduler가 Pod 배치 시 고려할 최소 자원
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+
+            # Frontend 컨테이너가 사용할 수 있는 최대 자원
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+
+          # Frontend 서버가 최초 실행될 때까지 기다린다.
+          # 성공 전에는 Readiness/Liveness Probe가 실행되지 않는다.
+          startupProbe:
+            httpGet:
+              path: /html/index.html
+              port: http
+            periodSeconds: 5             # 5초마다 검사
+            timeoutSeconds: 3            # 응답을 최대 3초 기다림
+            failureThreshold: 12         # 최대 60초 동안 시작을 기다림
+
+          # Frontend가 요청을 받을 준비가 되었는지 확인한다.
+          # 실패한 Pod는 Frontend Service의 연결 대상에서 제외된다.
+          readinessProbe:
+            httpGet:
+              path: /html/index.html
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # 실행 중인 Frontend 컨테이너가 정상인지 확인한다.
+          # 연속 실패하면 kubelet이 컨테이너를 재시작한다.
+          livenessProbe:
+            httpGet:
+              path: /html/index.html
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+---
+# 08-deployment-backend.yaml
+# Backend 애플리케이션을 Pod 2개로 실행하고 Rolling Update로 관리
+
+apiVersion: apps/v1                 # Deployment는 apps API 그룹의 v1 버전 사용
+kind: Deployment                    # 생성할 리소스 종류는 Deployment
+
+metadata:
+  name: backend-deployment          # Deployment 객체의 이름
+  namespace: hailey-community-dev   # 리소스를 생성할 Namespace
+  labels:
+    app: hailey-community           # 프로젝트 식별 label
+    tier: backend                   # Backend 컴포넌트 식별 label
+
+spec:
+  # Backend Pod를 항상 2개 유지한다.
+  # Pod 하나에 장애가 발생해도 나머지 Pod가 요청을 처리할 수 있다.
+  replicas: 2
+
+  # 기존 Pod를 한 번에 제거하지 않고 새로운 버전으로 순차 교체한다.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # 업데이트 중 사용할 수 없는 Pod를 허용하지 않는다.
+      # replicas가 2이면 Ready 상태의 기존 Pod 수를 최대한 유지한다.
+      maxUnavailable: 0
+
+      # 업데이트 중 replicas보다 최대 1개의 Pod를 추가 생성할 수 있다.
+      # 기존 Pod를 종료하기 전에 새 Pod를 먼저 생성한다.
+      maxSurge: 1
+
+  # 새 Pod가 Ready 상태가 된 후 최소 10초 동안 정상 상태를 유지해야
+  # Deployment에서 사용 가능한 Pod로 판단한다.
+  minReadySeconds: 10
+
+  # Rolling Update가 300초 동안 진행되지 않으면 실패 상태로 처리한다.
+  progressDeadlineSeconds: 300
+
+  # Deployment가 관리할 Pod를 선택하는 조건이다.
+  # template.metadata.labels와 반드시 일치해야 한다.
+  selector:
+    matchLabels:
+      app: hailey-community
+      tier: backend
+
+  # Deployment가 생성할 Pod의 명세
+  template:
+    metadata:
+      labels:
+        # Deployment selector 및 Service selector와 연결되는 Pod label
+        app: hailey-community
+        tier: backend
+
+    spec:
+      # Pod 종료 요청 후 컨테이너가 정상 종료될 수 있도록 최대 30초를 기다린다.
+      terminationGracePeriodSeconds: 30
+
+      # Private Docker Hub 이미지를 내려받기 위한 인증 Secret
+      # 이미지가 Public이라면 이 설정은 제거할 수 있다.
+      imagePullSecrets:
+        - name: dockerhub-secret
+
+      containers:
+        - name: backend
+
+          # 최초 배포에 사용할 Backend 이미지
+          # Rolling Update 테스트 시 이 이미지 태그를 새로운 버전으로 변경한다.
+          image: khm8992/hailey-community:backend-a1065c270292b98190aa10f91296cc13f868399f
+
+          # 해당 이미지가 Node에 없을 때 Docker Hub에서 내려받는다.
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http              # Probe와 Service에서 참조할 포트 이름
+              containerPort: 8090     # Spring Boot Backend의 컨테이너 포트
+
+          # ConfigMap과 Secret의 값을 컨테이너 환경변수로 전달한다.
+          env:
+            # Spring Boot에서 사용할 설정 Profile
+            - name: SPRING_PROFILES_ACTIVE
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-backend
+                  key: SPRING_PROFILES_ACTIVE
+
+            # Spring Boot 서버 실행 포트
+            - name: SERVER_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-backend
+                  key: SERVER_PORT
+
+            # Frontend 요청을 허용하기 위한 CORS 설정
+            - name: CORS_ALLOWED_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-backend
+                  key: CORS_ALLOWED_ORIGINS
+
+            # Kubernetes 외부에 존재하는 RDS MySQL 연결 주소
+            - name: SPRING_DATASOURCE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-backend
+                  key: SPRING_DATASOURCE_URL
+
+            # RDS에 접속할 애플리케이션 사용자명
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-backend
+                  key: SPRING_DATASOURCE_USERNAME
+
+            # RDS 비밀번호는 민감정보이므로 ConfigMap이 아닌 Secret에서 가져온다.
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hailey-community-secret-backend
+                  key: SPRING_DATASOURCE_PASSWORD
+
+          # 스케줄링 및 실행 시 Backend 컨테이너에 할당할 자원 설정
+          resources:
+            # Kubernetes Scheduler가 Pod를 배치할 때 확보해야 하는 최소 자원
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+
+            # Backend 컨테이너 하나가 사용할 수 있는 최대 자원
+            limits:
+              cpu: "750m"
+              memory: "1Gi"
+
+          # Spring Boot와 외부 DB 연결을 포함한 최초 실행이 완료될 때까지 기다린다.
+          # Startup Probe가 성공하기 전에는 Readiness/Liveness Probe를 실행하지 않는다.
+          startupProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 5          # 5초마다 검사
+            timeoutSeconds: 3         # 요청 응답을 최대 3초 대기
+            failureThreshold: 30      # 최대 150초 동안 시작을 기다림
+
+          # Backend가 실제 요청을 받을 준비가 되었는지 확인한다.
+          # 실패한 Pod는 Backend Service의 Endpoint에서 제외된다.
+          # Rolling Update 무중단 배포에서 가장 중요한 Probe이다.
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # 실행 중인 Backend가 정상적으로 동작하는지 확인한다.
+          # 연속으로 실패하면 kubelet이 해당 컨테이너를 재시작한다.
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+---
+# 09-service-frontend.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: hailey-community-dev # Service는 frontend Pod와 동일한 Namespace
+  labels:
+    app: hailey-community
+    tier: frontend
+spec:
+# 외부에서 worker Node의 30080 포트로 접근하면 frontend Pod의 8080 포트로 연결된다.
+# NodePort Service에도 ClusterIP가 자동으로 생성된다.
+  type: NodePort
+  selector:
+    app: hailey-community
+    tier: frontend
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: http # Frontend Pod의 이름있는 포트(http)로 연결
+      nodePort: 30080 # Worker Node의 30080 포트로 외부에 공개, 기본허용 범위는 30000~32767
+
+---
+# 10-service-backend.yaml
+apiVersion: v1                          # 리소스가 속한 API 그룹 및 버전 (core/v1)
+kind: Service                           # 생성할 리소스의 종류는 Service
+metadata:
+  name: backend-service              # 생성할 Service의 이름 (kubectl로 조회할 때 사용됨)
+  namespace: hailey-community-dev   # Backend Pod와 동일한 Namespace에 생성
+  labels:
+      app: hailey-community
+      tier: backend
+spec:
+  # Backend Deployment가 생성한 Pod의 label과 일치해야 한다.
+  selector:
+    app: hailey-community
+    tier: backend
+  ports:
+    - name: http                        # Service가 연결할 Pod의 포트 이름
+      protocol: TCP                     # Service가 연결할 Pod의 프로토콜
+      port: 8090                        # Service가 열어주는 포트 번호
+      targetPort: http                  # 연결 대상 Pod의 컨테이너에서 실제 서비스가 바인딩된 포트
+  type: ClusterIP                       # Service 타입: 클러스터 내부에서만 접근 가능한 기본 타입

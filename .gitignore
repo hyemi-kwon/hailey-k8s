@@ -1,0 +1,21 @@
+# Actual manifest containing real secrets
+/hailey-community.yaml
+
+# Kubernetes secrets
+*-secret.yaml
+values-secret.yaml
+secrets/
+
+# Credentials
+.env
+.env.*
+*.pem
+*.key
+kubeconfig
+.kube/
+
+# Helm packages
+*.tgz
+
+# OS files
+.DS_Store
