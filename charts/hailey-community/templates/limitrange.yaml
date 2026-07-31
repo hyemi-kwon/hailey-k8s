@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: LimitRange #기본값을 정의
+metadata:
+  name: hailey-community-range
+  namespace: {{ .Release.Namespace }} # 배포 시 지정된 네임스페이스 동적 주입
+spec:
+  limits:
+    - type: Container # 제한을 적용할 대상을 지정 ('컨테이너' 단위로 적용)
+
+
+      min: # 컨테이너가 가질 수 있는 자원의 최솟값
+        cpu: {{ .Values.limitRange.container.min.cpu | quote }}
+        memory: {{ .Values.limitRange.container.min.memory | quote }}
+      max: # 컨테이너가 가질 수 있는 자원의 최댓값
+        cpu: {{ .Values.limitRange.container.max.cpu | quote }}
+        memory: {{ .Values.limitRange.container.max.memory | quote }}
+
+
+      defaultRequest: # resource생략했을때 쿠버네티스가 자동으로 할당하는 기본값
+        cpu: {{ .Values.limitRange.container.defaultRequest.cpu | quote }}
+        memory: {{ .Values.limitRange.container.defaultRequest.memory | quote }}
+      default: # limits생략했을 때 쿠버네티스가 자동으로 할당하는 기본값
+        cpu: {{ .Values.limitRange.container.default.cpu | quote }}
+        memory: {{ .Values.limitRange.container.default.memory | quote }}

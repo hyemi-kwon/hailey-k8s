@@ -1,0 +1,15 @@
+apiVersion: v1 # 쿠버네티스 코어 API 버전 (ConfigMap은 v1을 사용)
+kind: ConfigMap # 생성할 리소스의 종류: 환경설정 데이터를 저장하는 ConfigMap
+metadata:
+  name: hailey-community-config-frontend # 이 ConfigMap의 고유 이름
+  # Helm 템플릿 문법: 'helm install' 명령어를 실행할 때 지정한 네임스페이스를 동적으로 가져와서 주입함
+  namespace: {{ .Release.Namespace }}
+  labels: # 이 리소스를 쉽게 찾고 관리하기 위해 붙이는 꼬리표(이름표)
+    app: hailey-community
+    tier: frontend
+data: # 실제 애플리케이션(프론트엔드)에 전달할 설정 값들 (Key-Value 형태)
+  # values.yaml의 frontend.config.port 값을 가져온 뒤, 반드시 문자열("")로 처리(| quote)하여 넣음
+  PORT: {{ .Values.frontend.config.port | quote }}
+
+  # values.yaml의 frontend.config.apiBaseUrl 값을 가져와 문자열로 변환하여 넣음
+  API_BASE_URL: {{ .Values.frontend.config.apiBaseUrl | quote }}

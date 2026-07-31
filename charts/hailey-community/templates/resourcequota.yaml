@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ResourceQuota # namespace 안에서 사용할 수 있는 리소스 총량 제한
+metadata:
+  name: hailey-community-quota # 이 ResourceQuota의 고유 이름
+  namespace: {{ .Release.Namespace }} # 배포 시 지정된 네임스페이스 동적 주입
+spec:
+  hard:
+    # 이 네임스페이스 안의 모든 파드가 요구(request)할 수 있는 CPU 총합의 상한선
+    requests.cpu: {{ .Values.resourceQuota.hard.requestsCpu | quote }}
+
+    # 모든 파드가 요구할 수 있는 메모리 총합의 상한선
+    requests.memory: {{ .Values.resourceQuota.hard.requestsMemory | quote }}
+
+    # 모든 파드가 최대로 끌어다 쓸 수 있는(limit) CPU 총합의 상한선
+    limits.cpu: {{ .Values.resourceQuota.hard.limitsCpu | quote }}
+
+    # 모든 파드가 최대로 끌어다 쓸 수 있는 메모리 총합의 상한선
+    limits.memory: {{ .Values.resourceQuota.hard.limitsMemory | quote }}
+
+    # 이 네임스페이스 안에 생성할 수 있는 파드(Pod) 개수의 총 상한선
+    pods: {{ .Values.resourceQuota.hard.pods | quote }}

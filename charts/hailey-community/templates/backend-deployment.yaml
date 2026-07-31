@@ -1,0 +1,124 @@
+apiVersion: apps/v1 # Deployment 리소스가 속한 API 그룹과 버전
+kind: Deployment # 파드(Pod)의 생성, 복제, 롤링 업데이트를 관리하는 리소스
+metadata:
+  name: backend-deployment # 백엔드 Deployment의 고유 이름
+  namespace: {{ .Release.Namespace }} # 배포 시 지정한 네임스페이스 동적 주입
+  labels: # 이 Deployment 리소스 자체에 대한 이름표
+    app: hailey-community
+    tier: backend
+
+spec:
+  # values.yaml에 지정된 백엔드 파드 복제본 개수
+  replicas: {{ .Values.backend.replicaCount }}
+
+  strategy: # 무중단 배포(업데이트) 전략
+    type: RollingUpdate # 롤링 업데이트 사용
+    rollingUpdate:
+      maxUnavailable: 0 ## 업데이트 도중 '서비스 불가능한 파드 수'의 최대치 (0이므로 무조건 기존 파드 수를 유지하면서 새 파드를 먼저 띄움, 가용성 유지)
+      maxSurge: 1 # 업데이트 중 원래 개수보다 추가로 더 띄울 수 있는 새 파드 수 (1개씩 띄움)
+
+  minReadySeconds: 10 # 새 파드가 Ready 상태가 된 후, 10초를 더 기다려야 완전히 배포(Available)된 것으로 판단
+  progressDeadlineSeconds: 300 # 배포가 300초(5분) 안에 끝나지 않으면 실패로 간주 DB가 있어서 오래 걸릴 수 있으므로 5분으로 넉넉히 설정
+
+  selector: # Deployment가 관리할 파드를 찾는 레이더망 설정
+    matchLabels:
+      app: hailey-community
+      tier: backend
+
+  template: # 여기서부터는 실제로 찍어낼 '파드(Pod)'의 설계도(붕어빵 틀)입니다.
+    metadata:
+      labels: # 생성될 파드에 부착할 이름표 (위의 selector와 반드시 일치해야 함!)
+        app: hailey-community
+        tier: backend
+
+    spec: # 파드 상세 스펙
+      terminationGracePeriodSeconds: 30 # 파드 종료 명령 시, 하던 일을 마무리할 유예 시간을 최대 30초 줌
+
+      imagePullSecrets:
+# Private Registry에서 이미지를 가져올 때 쓸 Secret 이름 (values.yaml 참조)
+{{ toYaml .Values.imagePullSecrets | indent 8 }}
+
+      containers: # 파드 안에 들어갈 컨테이너 목록
+        - name: backend # 백엔드 컨테이너 이름
+          # 백엔드 이미지 주소 (저장소:태그)
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.containerPort }} # Spring Boot가 띄워질 포트 (예: 8090)
+
+          env: # 컨테이너에 주입할 환경 변수 세팅
+            # --- 1. ConfigMap에서 가져오는 일반 설정값들 ---
+            - name: SPRING_PROFILES_ACTIVE
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-backend
+                  key: SPRING_PROFILES_ACTIVE
+
+            - name: SERVER_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-backend
+                  key: SERVER_PORT
+
+            - name: CORS_ALLOWED_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-backend
+                  key: CORS_ALLOWED_ORIGINS
+
+            # --- 2. Secret에서 가져오는 민감한 정보들 (DB 접속 정보 등) ---
+            # values.yaml에 지정된 Secret 이름과 Key를 참조하여 실제 값을 몰래 주입함
+            - name: SPRING_DATASOURCE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.backend.existingSecret.name }}
+                  key: {{ .Values.backend.existingSecret.datasourceUrlKey }}
+
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.backend.existingSecret.name }}
+                  key: {{ .Values.backend.existingSecret.datasourceUsernameKey }}
+
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.backend.existingSecret.name }}
+                  key: {{ .Values.backend.existingSecret.datasourcePasswordKey }}
+
+          resources:
+# values.yaml의 backend.resources(CPU/Memory 요청 및 제한량)를 들고 와서 삽입
+{{ toYaml .Values.backend.resources | indent 12 }}
+
+          # [상태 검사 1] Startup Probe (Spring Boot용)
+          # 자바/스프링은 켜지는데 시간이 꽤 걸리므로 failureThreshold를 30(최대 150초 대기)으로 넉넉히 줌
+          startupProbe:
+            httpGet:
+              path: /v1/health # 백엔드의 Health Check API 경로
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+
+          # [상태 검사 2] Readiness Probe
+          # 이 검사에 3번 연속 통과해야 서비스(Service)에 연결되어 사용자 요청(트래픽)을 받기 시작함
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 3
+
+          # [상태 검사 3] Liveness Probe
+          # 10초마다 찔러서 3번 연속 대답이 없으면(Deadlock 등), 매니저가 이 컨테이너를 강제 재시작함
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3

@@ -1,0 +1,95 @@
+apiVersion: apps/v1 # Deployment 리소스가 속한 API 그룹과 버전
+kind: Deployment # 생성할 리소스의 종류: 파드의 생성, 복제, 배포(업데이트)를 총괄하는 관리자
+metadata:
+  name: frontend-deployment # 이 Deployment의 고유 이름
+  namespace: {{ .Release.Namespace }} # Helm이 배포될 네임스페이스를 동적으로 주입
+  labels: # 이 Deployment 자체에 붙이는 꼬리표
+    app: hailey-community
+    tier: frontend
+
+spec:
+  # values.yaml에서 설정한 파드(Pod)의 개수 유지 (예: 2개)
+  replicas: {{ .Values.frontend.replicaCount }}
+
+  strategy: # 파드를 새로운 버전으로 업데이트할 때의 전략 (무중단 배포)
+    type: RollingUpdate # 롤링 업데이트 방식 사용 (새파드를 만들어 배포 후 기존 파드를 순차 삭제)
+    rollingUpdate:
+      maxUnavailable: 0 # 업데이트 도중 '서비스 불가능한 파드 수'의 최대치 (0이므로 무조건 기존 파드 수를 유지하면서 새 파드를 먼저 띄움)
+      maxSurge: 1 # 업데이트 도중 '지정된 replicas보다 추가로 띄울 수 있는 파드 수' (1개씩 새 파드를 추가 생성함)
+
+  minReadySeconds: 10 # 새 Pod가 Ready 상태를 10초간 유지해야 Deployment이 배포 완료로 간주 (즉, 새 Pod가 10초간 Ready 상태를 유지해야 기존 Pod를 삭제함)
+  progressDeadlineSeconds: 300 # 300초 안에 배포가 완료되지 않으면 배포 실패(Timeout)로 간주
+
+  selector: # Deployment가 관리할 파드를 찾는 조건 (아래 template의 labels와 무조건 일치해야 함!)
+    matchLabels:
+      app: hailey-community
+      tier: frontend
+
+  template: # [붕어빵 틀] 실제로 생성될 파드(Pod)의 설계도
+    metadata:
+      labels: # 생성될 파드에 붙여줄 꼬리표 (위의 selector가 이 꼬리표를 보고 관리함)
+        app: hailey-community
+        tier: frontend
+
+    spec: # 생성될 파드의 상세 스펙
+      terminationGracePeriodSeconds: 30 # 파드가 종료될 때, 하던 작업을 안전하게 마무리할 시간을 최대 30초 줌
+
+      imagePullSecrets:
+# values.yaml의 배열을 YAML 형식으로 변환하고, 8칸 들여쓰기를 적용해서 삽입함 (Helm 템플릿 문법)
+{{ toYaml .Values.imagePullSecrets | indent 8 }}
+
+      containers: # 파드 안에 띄울 컨테이너 목록
+        - name: frontend # 컨테이너 이름
+          # 레포지토리와 태그를 합쳐서 최종 이미지 주소 생성 (예: khm8992/...:frontend-a106...)
+          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+          # 이미지 다운로드 정책 (로컬에 없을 때만 받기)
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+
+          ports:
+            - name: http # 이 포트의 별명
+              containerPort: {{ .Values.frontend.containerPort }} # 컨테이너가 열어둘 포트 (예: 8080)
+
+          env: # 컨테이너 안에 주입할 환경 변수 (ConfigMap에서 값을 가져옴)
+            - name: PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-frontend # 참조할 ConfigMap 이름
+                  key: PORT # 가져올 Key 이름
+
+            - name: API_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: hailey-community-config-frontend
+                  key: API_BASE_URL
+
+          resources:
+# values.yaml에 정의된 자원(cpu, memory) 설정(requests, limits)을 그대로 들고 와서 12칸 들여쓰기로 삽입
+{{ toYaml .Values.frontend.resources | indent 12 }}
+
+          # [상태 검사 1] Startup Probe: 앱이 처음에 완전히 켜졌는지 확인 (가장 먼저 실행됨)
+          startupProbe:
+            httpGet:
+              path: /html/index.html # 이 경로로 HTTP 요청을 보내서 200번대 응답이 오는지 확인
+              port: http
+            periodSeconds: 5 # 5초마다 검사
+            timeoutSeconds: 3 # 3초 안에 응답 없으면 실패
+            failureThreshold: 12 # 최대 12번(5초*12=60초)까지 실패를 인내해줌 (이후엔 컨테이너 재시작)
+
+          # [상태 검사 2] Readiness Probe: 트래픽을 받을(서비스할) 준비가 되었는지 확인
+          readinessProbe:
+            httpGet:
+              path: /html/index.html
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3 # 3번 연속 실패하면 이 파드에는 사용자 트래픽을 안 보냄 (Service에서 제외)
+            successThreshold: 3 # 3번 연속 성공해야 다시 트래픽을 보내줌
+
+          # [상태 검사 3] Liveness Probe: 앱이 살아있는지(먹통이 되지 않았는지) 주기적으로 확인
+          livenessProbe:
+            httpGet:
+              path: /html/index.html
+              port: http
+            periodSeconds: 10 # 10초마다 검사
+            timeoutSeconds: 3
+            failureThreshold: 3 # 3번 연속 실패하면 앱이 멈춘 것으로 간주하고 컨테이너를 강제 재시작(Restart)시킴
