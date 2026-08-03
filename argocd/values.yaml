@@ -1,0 +1,13 @@
+server:
+  service:
+    type: NodePort # argocd접속을 위한 노출
+    nodePortHttp: 32081
+    nodePortHttps: 32481
+  
+  ingress:
+    enabled: false 
+
+configs:
+  params:
+    server.insecure: true # 실습 중 argocd 서버가 내부적으로 http를 사용하도록 설
+
