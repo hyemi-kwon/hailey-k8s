@@ -14,12 +14,17 @@ spec:
     - host: {{ .Values.ingress.host | quote }} # 도메인(주소)으로 들어왔는가 (예: hailey.local)
       http:
         paths: # hailey.local로 들어온 요청 들 frontend-service로 전달
-          - path: {{ .Values.ingress.path }} #도메인 뒤에 경로(Path)가 있는가 (예: / )
-            pathType: {{ .Values.ingress.pathType }}
-
-
+          - path: /v1  #도메인 뒤에 경로(Path)가 있는가 (예: / )
+            pathType: Prefix
             backend:
               service:
-                name: frontend-service # 트래픽을 넘겨줄 내부 서비스 이름
+                name: backend-service
+                port:
+                  number: {{ .Values.backend.service.port }}
+          - path: {{ .Values.ingress.path}}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: frontend-service
                 port:
                   number: {{ .Values.frontend.service.port }}

@@ -14,7 +14,7 @@ frontend:
 
   config:
     port: "8080"
-    apiBaseUrl: "http://backend-service:8090" # Backend API Base URL
+    apiBaseUrl: "http://dev.hailey.my:32080" # Backend API Base URL
 
   service:
     # 외부 요청은 Ingress가 받고, Service는 클러스터 내부에서만 사용한다.
