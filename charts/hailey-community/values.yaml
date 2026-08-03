@@ -44,7 +44,7 @@ backend:
     # 실제 Secret 값은 Git에 저장하지 않고 기존 Secret을 참조한다.
     springProfilesActive: "prod"
     serverPort: "8090"
-    corsAllowedOrigins: "http://hailey.local"
+    corsAllowedOrigins: "http://dev.hailey.my:32080"
 
   service:
     # 클러스터 내부에서 백엔드 Pod와 통신할 때 사용한다. 외부 요청은 Ingress가 받고, Service는 클러스터 내부에서만 사용한다.
@@ -69,9 +69,9 @@ backend:
 
 
 ingress: # Ingress 설정
+  host: dev.hailey.my
   enabled: true # Ingress를 사용할지 여부
   className: nginx # Ingress Controller의 className. Ingress Controller가 여러 개일 경우 특정 Ingress Controller를 지정할 수 있다.
-  host: hailey.local # Ingress를 통해 접근할 도메인 이름
   path: /
   pathType: Prefix # Prefix 경로가 지정된 접두사로 시작하면 매핑
 
