@@ -30,11 +30,11 @@ frontend:
       memory: "256Mi"
 
 backend:
-  replicaCount: 2 # Deployment에서 유지할 Pod 복제 수
+  replicaCount: 1 # 로컬 메모리 세션을 사용하므로 공유 세션 도입 전까지 단일 Pod 유지
 
   image:
     repository: khm8992/hailey-community                    # Backend 이미지 레포지토리
-    tag: "backend-a1065c270292b98190aa10f91296cc13f868399f" # Backend 이미지 태그
+    tag: "backend-06c3b885c2aafa053da5fb136264f9f59798e398" # Backend 이미지 태그
     pullPolicy: IfNotPresent                                # 이미지가 로컬에 없을 경우에만 풀 (Always: 항상 풀, Never: 절대 풀 하지 않음)
 
   containerPort: 8090 # Backend 컨테이너의 포트
