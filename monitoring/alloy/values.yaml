@@ -1,0 +1,211 @@
+# ============================================================
+# Grafana Alloy 설정
+# ============================================================
+
+alloy:
+  configMap:
+    # Alloy 설정을 ConfigMap으로 생성한다.
+    create: true
+
+    # Alloy 설정 언어로 Kubernetes Pod 로그 수집 흐름을 정의한다.
+    content: |-
+      // ------------------------------------------------------
+      // 1. Kubernetes Pod 검색
+      // ------------------------------------------------------
+
+      // Kubernetes API에서 현재 실행 중인 Pod를 탐색한다.
+      discovery.kubernetes "pods" {
+        role = "pod"
+
+        // Alloy는 각 Node에 DaemonSet으로 실행된다.
+        // 모든 Pod를 중복 수집하지 않도록
+        // 현재 Alloy가 실행 중인 Node의 Pod만 탐색한다.
+        selectors {
+          role  = "pod"
+          field = "spec.nodeName=" + sys.env("NODE_NAME")
+        }
+      }
+
+
+      // ------------------------------------------------------
+      // 2. Kubernetes 메타데이터를 Loki 라벨로 변환
+      // ------------------------------------------------------
+
+      discovery.relabel "pod_logs" {
+        targets = discovery.kubernetes.pods.targets
+
+        // Namespace 이름
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          action        = "replace"
+          target_label  = "namespace"
+        }
+
+        // Pod 이름
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          action        = "replace"
+          target_label  = "pod"
+        }
+
+        // Container 이름
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          action        = "replace"
+          target_label  = "container"
+        }
+
+        // Pod가 실행 중인 Node 이름
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          action        = "replace"
+          target_label  = "node"
+        }
+
+        // 프로젝트에서 사용하는 app 라벨
+        // 예: app=hailey-community
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          action        = "replace"
+          target_label  = "app"
+        }
+
+        // 프로젝트에서 사용하는 tier 라벨
+        // 예: tier=backend 또는 tier=frontend
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_tier"]
+          action        = "replace"
+          target_label  = "tier"
+        }
+
+        // Namespace와 Container 이름을 조합하여 job 라벨 생성
+        rule {
+          source_labels = [
+            "__meta_kubernetes_namespace",
+            "__meta_kubernetes_pod_container_name",
+          ]
+          action       = "replace"
+          target_label = "job"
+          separator    = "/"
+          replacement  = "$1"
+        }
+
+        // Container Runtime 종류 추출
+        // 예: containerd
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_id"]
+          action        = "replace"
+          target_label  = "container_runtime"
+          regex         = `^(\S+):\/\/.+$`
+          replacement   = "$1"
+        }
+      }
+
+
+      // ------------------------------------------------------
+      // 3. Kubernetes API에서 Container 로그 읽기
+      // ------------------------------------------------------
+
+      // relabel된 Pod 목록의 로그를 Kubernetes API로 수집한다.
+      //
+      // Node의 /var/log 디렉터리를 직접 마운트하지 않으므로
+      // Host 파일시스템 접근 권한이 필요하지 않다.
+      loki.source.kubernetes "pod_logs" {
+        targets    = discovery.relabel.pod_logs.output
+        forward_to = [loki.process.pod_logs.receiver]
+      }
+
+
+      // ------------------------------------------------------
+      // 4. 로그에 클러스터 공통 라벨 추가
+      // ------------------------------------------------------
+
+      loki.process "pod_logs" {
+        // 여러 클러스터를 구분할 수 있도록 고정 라벨을 추가한다.
+        stage.static_labels {
+          values = {
+            cluster = "hailey-k8s-dev",
+          }
+        }
+
+        forward_to = [loki.write.local.receiver]
+      }
+
+
+      // ------------------------------------------------------
+      // 5. 처리된 로그를 Loki로 전송
+      // ------------------------------------------------------
+
+      loki.write "local" {
+        endpoint {
+          // Loki Gateway의 Kubernetes 내부 DNS 주소
+          url = "http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push"
+        }
+      }
+
+  # Alloy 인스턴스 간 클러스터링은 사용하지 않는다.
+  # 각 Alloy는 자신이 실행되는 Node의 로그만 담당한다.
+  clustering:
+    enabled: false
+
+  # Alloy 자체 상태 데이터의 임시 저장 경로
+  storagePath: /tmp/alloy
+
+  # 각 Alloy Pod에 현재 Node 이름을 환경변수로 주입한다.
+  # 위 discovery.kubernetes의 Node 필터에서 사용한다.
+  extraEnv:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+
+  # Alloy 컨테이너 리소스 설정
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # Kubernetes API로 로그를 읽으므로 root 권한이 필요하지 않다.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 473
+    runAsGroup: 473
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+
+# ============================================================
+# Alloy Controller 설정
+# ============================================================
+
+controller:
+  # 각 Kubernetes Node에 Alloy Pod 하나씩 배포한다.
+  type: daemonset
+
+  # 변경된 Alloy Pod가 Ready 상태를 일정 시간 유지한 뒤
+  # 정상 배포로 판단한다.
+  minReadySeconds: 10
+
+
+# ============================================================
+# RBAC 설정
+# ============================================================
+
+rbac:
+  # Alloy가 Kubernetes API에서 Pod 정보를 발견하고
+  # Container 로그를 읽을 수 있도록 권한을 생성한다.
+  create: true
+
+
+# ============================================================
+# ServiceAccount 설정
+# ============================================================
+
+serviceAccount:
+  # Alloy 전용 ServiceAccount를 생성한다.
+  create: true

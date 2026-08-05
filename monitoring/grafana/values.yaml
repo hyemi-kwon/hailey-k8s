@@ -1,0 +1,158 @@
+# ============================================================
+# Grafana Pod 배치 설정
+# ============================================================
+
+# monitoring=yes 라벨이 있는 워커 노드에
+# Grafana Pod를 배치한다.
+nodeSelector:
+  monitoring: "yes"
+
+
+# ============================================================
+# Grafana Service 설정
+# ============================================================
+
+service:
+  # 외부 브라우저에서 Grafana UI에 접근할 수 있도록
+  # NodePort Service를 사용한다.
+  type: NodePort
+
+  # Prometheus는 30090, Grafana는 30091을 사용한다.
+  nodePort: 30091
+
+
+# ============================================================
+# Grafana 데이터 영속 저장 설정
+# ============================================================
+
+persistence:
+  # Grafana Pod가 재시작되더라도
+  # Dashboard와 사용자 설정을 유지하도록 PVC를 사용한다.
+  enabled: true
+
+  # PVC 방식으로 볼륨을 생성한다.
+  type: pvc
+
+  # Rancher Local Path Provisioner가 제공하는 StorageClass
+  #
+  # Grafana Chart에서는 storageClass가 아니라
+  # storageClassName이라는 키를 사용한다.
+  storageClassName: local-path
+
+  # 한 Node에서 읽기·쓰기가 가능한 볼륨
+  accessModes:
+    - ReadWriteOnce
+
+  # Grafana 데이터 저장 공간
+  size: 2Gi
+
+
+# ============================================================
+# Grafana 관리자 계정
+# ============================================================
+
+# 관리자 사용자 이름
+adminUser: admin
+
+# adminPassword는 Git에 작성하지 않는다.
+# Helm Chart가 Kubernetes Secret으로 자동 생성한다.
+
+
+# ============================================================
+# Grafana Data Source 자동 등록
+# ============================================================
+
+datasources:
+  datasources.yaml:
+    # Grafana Provisioning 설정 API 버전
+    apiVersion: 1
+
+    # Grafana에 자동 등록할 데이터소스 목록
+    datasources:
+      # ------------------------------------------------------
+      # Prometheus 메트릭 데이터소스
+      # ------------------------------------------------------
+      - name: Prometheus
+
+        # 데이터소스를 식별하는 고정 UID
+        uid: prometheus
+
+        # Prometheus 형식의 메트릭 데이터소스
+        type: prometheus
+
+        # Grafana Backend가 Prometheus에 접근한다.
+        access: proxy
+
+        # Prometheus Service의 Kubernetes 내부 DNS 주소
+        url: http://prometheus-server.monitoring.svc.cluster.local
+
+        # Grafana의 기본 데이터소스로 지정한다.
+        isDefault: true
+
+        # UI에서 실수로 설정을 변경하지 못하게 한다.
+        editable: false
+
+        jsonData:
+          # Prometheus 수집 주기와 맞춘 최소 조회 간격
+          timeInterval: 15s
+
+      # ------------------------------------------------------
+      # Loki 로그 데이터소스
+      # ------------------------------------------------------
+      - name: Loki
+
+        # Loki 데이터소스를 식별하는 고정 UID
+        uid: loki
+
+        # Loki 로그 데이터소스
+        type: loki
+
+        # Grafana Backend가 Loki에 접근한다.
+        access: proxy
+
+        # Loki Gateway의 Kubernetes 내부 DNS 주소
+        url: http://loki-gateway.monitoring.svc.cluster.local
+
+        # 기본 데이터소스는 Prometheus로 유지한다.
+        isDefault: false
+
+        # UI에서 실수로 설정을 변경하지 못하게 한다.
+        editable: false
+
+        jsonData:
+          # 한 번의 로그 조회에서 표시할 최대 줄 수
+          maxLines: 1000
+
+
+# ============================================================
+# Grafana 리소스 설정
+# ============================================================
+
+resources:
+  # Pod가 스케줄링될 때 확보할 최소 자원
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+  # Grafana 컨테이너가 사용할 수 있는 최대 자원
+  limits:
+    cpu: 300m
+    memory: 512Mi
+
+
+# ============================================================
+# Grafana 보안 설정
+# ============================================================
+
+grafana.ini:
+  users:
+    # 사용자가 직접 Grafana 계정을 생성하지 못하게 한다.
+    allow_sign_up: false
+
+  auth.anonymous:
+    # 로그인하지 않은 익명 접근을 차단한다.
+    enabled: false
+
+  security:
+    # iframe을 통한 Grafana 화면 삽입을 차단한다.
+    allow_embedding: false

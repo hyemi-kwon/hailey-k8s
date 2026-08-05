@@ -1,0 +1,221 @@
+# ============================================================
+# Loki 배포 방식
+# ============================================================
+
+# Loki의 모든 기능을 하나의 프로세스에서 실행한다.
+#
+# 소규모 개발·학습 환경에 적합하며,
+# 여러 마이크로서비스로 나누는 SimpleScalable 방식보다
+# 필요한 Pod와 메모리가 적다.
+deploymentMode: SingleBinary
+
+
+# ============================================================
+# Loki 애플리케이션 설정
+# ============================================================
+
+loki:
+  # 여러 조직의 로그를 분리하는 멀티테넌시 인증을 비활성화한다.
+  # 현재는 하나의 개인 프로젝트 클러스터이므로 false로 설정한다.
+  auth_enabled: false
+
+  commonConfig:
+    # Loki를 한 개의 replica로 실행하므로
+    # 로그 데이터의 복제 계수도 반드시 1로 설정한다.
+    #
+    # replica는 1개인데 replication_factor가 3이면
+    # 로그 쓰기 요청이 실패할 수 있다.
+    replication_factor: 1
+
+  # Loki가 로그의 인덱스와 Chunk를 저장하는 형식을 정의한다.
+  schemaConfig:
+    configs:
+      # 이 스키마 설정이 적용되는 시작 날짜
+      - from: "2024-04-01"
+
+        # Loki가 권장하는 TSDB 인덱스 저장 방식
+        store: tsdb
+
+        # AWS S3 대신 Loki Pod의 파일시스템을 사용한다.
+        # 파일시스템은 아래 singleBinary.persistence PVC에 저장된다.
+        object_store: filesystem
+
+        # 현재 Loki에서 사용하는 스키마 버전
+        schema: v13
+
+        index:
+          # 생성되는 인덱스 이름의 접두사
+          prefix: loki_index_
+
+          # 하루 단위로 인덱스를 생성한다.
+          period: 24h
+
+  storage:
+    # 학습용 환경이므로 S3나 MinIO 대신
+    # Loki PVC의 로컬 파일시스템에 로그를 저장한다.
+    type: filesystem
+
+  limits_config:
+    # 수집한 로그를 7일 동안 보관한다.
+    retention_period: 168h
+
+    # 구조화된 메타데이터를 허용한다.
+    allow_structured_metadata: true
+
+  compactor:
+    # 보관 기간이 지난 로그를 실제 저장소에서 정리한다.
+    retention_enabled: true
+
+    # 로그 삭제 요청 정보를 파일시스템에 저장한다.
+    delete_request_store: filesystem
+
+
+# ============================================================
+# SingleBinary Loki Pod 설정
+# ============================================================
+
+singleBinary:
+  # 학습용 환경이므로 Loki Pod를 하나만 실행한다.
+  replicas: 1
+
+  # monitoring=yes 라벨이 붙은 워커 노드에 Loki를 배치한다.
+  nodeSelector:
+    monitoring: "yes"
+
+  # 로그 데이터 보존을 위한 PVC 설정
+  persistence:
+    # Loki Pod가 재시작돼도 로그를 보존한다.
+    enabled: true
+
+    # Rancher Local Path Provisioner 사용
+    storageClass: local-path
+
+    # 로그 저장 용량
+    size: 5Gi
+
+  # Loki Server의 CPU와 메모리 설정
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 750m
+      memory: 1Gi
+
+
+# ============================================================
+# 다른 배포 방식 비활성화
+# ============================================================
+
+# SingleBinary를 사용하므로 SimpleScalable 방식의
+# read, write, backend Pod는 생성하지 않는다.
+read:
+  replicas: 0
+
+write:
+  replicas: 0
+
+backend:
+  replicas: 0
+
+# Distributed 방식의 개별 컴포넌트도 생성하지 않는다.
+ingester:
+  replicas: 0
+
+querier:
+  replicas: 0
+
+queryFrontend:
+  replicas: 0
+
+queryScheduler:
+  replicas: 0
+
+distributor:
+  replicas: 0
+
+compactor:
+  replicas: 0
+
+indexGateway:
+  replicas: 0
+
+bloomPlanner:
+  replicas: 0
+
+bloomBuilder:
+  replicas: 0
+
+bloomGateway:
+  replicas: 0
+
+
+# ============================================================
+# Loki Gateway 설정
+# ============================================================
+
+gateway:
+  # Grafana와 Alloy가 Loki에 접근할 단일 진입점이다.
+  enabled: true
+
+  # Gateway 한 개만 실행한다.
+  replicas: 1
+
+  # Gateway도 모니터링 전용 노드에 배치한다.
+  nodeSelector:
+    monitoring: "yes"
+
+  service:
+    # Loki는 별도의 사용자 UI가 없으므로
+    # 외부 NodePort로 공개하지 않고 클러스터 내부에서만 사용한다.
+    type: ClusterIP
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+
+# ============================================================
+# Cache 설정
+# ============================================================
+
+# 기본 Chart는 Memcached 기반 Cache Pod를 추가할 수 있다.
+# 현재는 작은 학습용 클러스터이므로 자원을 절약하기 위해 끈다.
+chunksCache:
+  enabled: false
+
+resultsCache:
+  enabled: false
+
+
+# ============================================================
+# MinIO 설정
+# ============================================================
+
+# 외부 Object Storage 대신 local-path PVC를 사용하므로
+# 내장 MinIO는 설치하지 않는다.
+minio:
+  enabled: false
+
+
+# ============================================================
+# Loki Canary 설정
+# ============================================================
+
+# 각 Node에서 테스트 로그를 Loki로 보내고 다시 조회하여
+# 로그 수집 경로가 정상인지 지속적으로 검사한다.
+lokiCanary:
+  enabled: true
+
+
+# ============================================================
+# Helm 테스트 Pod 설정
+# ============================================================
+
+# 상시 실행 환경에서는 별도의 Helm 테스트 Pod를 만들지 않는다.
+test:
+  enabled: false
